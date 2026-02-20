@@ -1,0 +1,113 @@
+# Compiled binaries
+ims_client
+ims_server
+sensor_test
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Certificates and private keys (security sensitive)
+certs/*.crt
+certs/*.key
+certs/*.pem
+certs/*.p12
+certs/*.pfx
+
+# Keep only the certs directory structure
+!certs/.gitkeep
+
+# Log files
+*.log
+blackbox.log
+
+# Core dumps
+core
+core.*
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.*.swp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Build directories
+build/
+dist/
+bin/
+obj/
+
+# Python cache (for dashboard.py)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Configuration files with sensitive data (if any)
+*.conf.local
+config/*.conf.backup
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Test output
+test_output/
+test_results/
+
+# Generated documentation
+docs/build/
+*.pdf
+
+# Package files
+*.tar.gz
+*.zip
+*.rar

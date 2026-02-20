@@ -4,13 +4,15 @@
 
 **Sentinel-RT** is a professional-grade, real-time industrial monitoring solution designed for the **QNX Real-Time Operating System (RTOS)** running on a Raspberry Pi 4.
 
-It monitors critical equipment health (Vibration & Sound) and provides a secure, encrypted data stream to remote clients. The system features **Mutual TLS (mTLS)** for "Zero Trust" security, a **Black Box** event recorder, and a live **Graphical Dashboard**.
+It monitors critical equipment health (Vibration, Sound, Temperature, and Current) and provides a secure, encrypted data stream to remote clients. The system features **Mutual TLS (mTLS)** for "Zero Trust" security, a **Black Box** event recorder, and a live **Graphical Dashboard**.
 
 ## Key Features
 
 ### ✅ 1. Real-Time Hardware Monitoring
 * **Vibration Monitoring:** Detects motor anomalies using SW-420 sensors via high-frequency GPIO polling.
 * **Acoustic Monitoring:** Measures noise intensity duty cycles to detect mechanical failure.
+* **Temperature Monitoring:** DS18B20 digital sensor for precision temperature readings (-55°C to +125°C).
+* **Current Monitoring:** ACS712 Hall-effect sensor via ADS1115 16-bit ADC for AC/DC current measurement.
 * **Deterministic Polling:** Dedicated QNX background threads ensure precise 1ms sampling intervals.
 
 ### ✅ 2. Enterprise-Grade Security
@@ -23,7 +25,7 @@ It monitors critical equipment health (Vibration & Sound) and provides a secure,
 ### ✅ 3. Advanced Data Handling
 * **Live Monitor Mode:** Push-based streaming protocol sends updates every 1 second.
 * **Black Box Logger:** Automatically saves `CRITICAL` alerts to a non-volatile `blackbox.log` file on the device (Forensics).
-* **Visual Dashboard:** Python-based GUI client providing real-time vibration and sound graphs.
+* **Visual Dashboard:** Python-based GUI client providing real-time vibration, sound, temperature, and current graphs.
 
 ---
 
@@ -31,7 +33,8 @@ It monitors critical equipment health (Vibration & Sound) and provides a secure,
 ```text
 ┌─────────────────────────┐       ┌─────────────────────────┐
 │     SENSORS (GPIO)      │       │    CLIENT APPLICATIONS  │
-│  (Vibration / Sound)    │       │ (Laptop / Control Room) │
+│ (Vib / Sound / I2C ADC) │       │ (Laptop / Control Room) │
+│      (1-Wire Temp)      │       │                         │
 └────────────┬────────────┘       └────────────┬────────────┘
              │ Signal                          │ mTLS (SSL/TLS)
              ▼                                 ▼
@@ -39,8 +42,9 @@ It monitors critical equipment health (Vibration & Sound) and provides a secure,
 │   QNX DRIVER LAYER      │       │     PROTOCOL LAYER      │
 │ (drivers/sensor_mgr.c)  │<─────>│  (protocol/protocol.c)  │
 │ - 1kHz Polling Thread   │ Data  │ - Command Parsing       │
-│ - Signal Accumulation   │       │ - Encryption            │
-│ - Health Evaluation     │       │ - Black Box Logging     │
+│ - I2C/ADC Read Logic    │       │ - Encryption            │
+│ - Signal Accumulation   │       │ - Black Box Logging     │
+│ - Health Evaluation     │       │                         │
 └─────────────────────────┘       └─────────────────────────┘
              │                                 ▲
              └───────────────┐                 │
@@ -55,13 +59,26 @@ It monitors critical equipment health (Vibration & Sound) and provides a secure,
 
 **Platform:** Raspberry Pi 4 Model B (Running QNX Neutrino 8.0)
 
-| Component | Function | Connection (RPi Pin) | GPIO Number |
-|-----------|----------|---------------------|-------------|
-| SW-420 | Vibration Sensor | Physical Pin 11 | GPIO 17 |
-| LM393 Mic | Sound Sensor | Physical Pin 13 | GPIO 27 |
-| LED (Opt) | Status Indicator | Physical Pin 15 | GPIO 22 |
+| Component | Function | Protocol | Connection (RPi Pin) | GPIO Number |
+|-----------|----------|----------|---------------------|-------------|
+| SW-420 | Vibration Sensor | GPIO | Physical Pin 11 | GPIO 17 |
+| LM393 Mic | Sound Sensor | GPIO | Physical Pin 13 | GPIO 27 |
+| DS18B20 | Temperature Sensor | 1-Wire | Physical Pin 7 | GPIO 4 |
+| ADS1115 | 16-bit ADC | I2C | Pins 3 & 5 (SDA/SCL) | - |
+| ACS712 | Current Sensor | Analog | Connected to ADS1115 CH0 | - |
+| LED (Opt) | Status Indicator | GPIO | Physical Pin 15 | GPIO 22 |
 
-*(Note: The system logic uses Digital Input for both sensors. Sound level is calculated based on the % of time the pin is HIGH vs LOW).*
+### I2C Configuration
+Before running the server, ensure the I2C driver is loaded:
+```bash
+# Load BCM2711 I2C driver for Raspberry Pi 4
+i2c-bcm2711 -p i2c1
+```
+
+**Note:** 
+- The DS18B20 requires a 4.7kΩ pull-up resistor between VDD and DATA line.
+- ADS1115 default I2C address: 0x48
+- Sound level is calculated based on the % of time the pin is HIGH vs LOW (duty cycle).
 
 ## Directory Structure
 ```
@@ -75,7 +92,7 @@ It monitors critical equipment health (Vibration & Sound) and provides a secure,
 │   ├── tls_helper.c       # OpenSSL Context & Certificate Loading
 │   └── ...
 ├── drivers/
-│   ├── sensors.c          # Low-level QNX GPIO Mapping
+│   ├── sensors.c          # Low-level QNX GPIO/I2C/1-Wire Mapping
 │   └── sensor_manager.c   # Background Polling Thread & Health Logic
 ├── protocol/
 │   ├── protocol.c         # Command Logic (Monitor, Log, Help)
@@ -100,25 +117,80 @@ Use the automated script to compile code and generate fresh SSL certificates:
 ./scripts/quick_start.sh all
 ```
 
-### 3. Start the Server (On Raspberry Pi)
-Must run as root to access GPIO hardware:
+### 3. Prepare Raspberry Pi (QNX RTOS)
+
+**IMPORTANT:** GPIO access on QNX requires root privileges.
+
+```bash
+# SSH into QNX Raspberry Pi
+ssh <user_name>@<RPI_IP_ADDRESS>
+
+# Create the deployment directory
+mkdir -p /data/home/<user_name>/ims
+cd /data/home/<user_name>/ims
+```
+
+### 4. Transfer Binaries to Raspberry Pi
+
+From your development machine:
+```bash
+# Transfer server binary and certificates
+scp ims_server <user_name>@<RPI_IP_ADDRESS>:/data/home/<user_name>/ims/
+scp -r certs/ <user_name>@<RPI_IP_ADDRESS>:/data/home/<user_name>/ims/
+```
+
+### 5. Start the Server (On Raspberry Pi)
+
+**Must run as root to access GPIO hardware:**
 ```bash
 # SSH into QNX Pi
+ssh <user_name>@<RPI_IP_ADDRESS>
+
+# Switch to root user (required for GPIO access)
 su
-cd ims
+
+# Navigate to deployment directory
+cd /data/home/<user_name>/ims
+
+# Ensure I2C driver is running
+i2c-bcm2711 -p i2c1
+
+# Start the server
 ./ims_server
+```
+
+Expected output:
+```
+[INFO] IMS Server starting...
+[INFO] Loading certificates from ./certs/
+[INFO] GPIO initialized (Vibration: GPIO17, Sound: GPIO27)
+[INFO] I2C device opened: /dev/i2c1
+[INFO] DS18B20 temperature sensor initialized
+[INFO] Server listening on port 8443
 ```
 
 ## Client Usage
 
 ### Option A: Graphical Dashboard (Python)
-Provides real-time charts of motor health.
+Provides real-time charts of motor health including vibration, sound, temperature, and current readings.
+
+**⚠️ Note:** The dashboard is currently under active development and may have incomplete features or bugs.
+
 ```bash
-# On your Laptop (Linux/Windows)
-python3 clients/dashboard.py
+# On your Laptop (Linux/Windows/macOS)
+python3 ./clients/dashboard.py
 ```
 
-*Requires `client.crt` and `client.key` in the project root.*
+**Requirements:**
+- Python 3.7+
+- Required packages: `matplotlib`, `numpy`
+- Valid client certificates (`client.crt` and `client.key`) in the project root
+
+**Dashboard Features:**
+- Real-time multi-panel graphs for all sensor readings
+- Color-coded health status indicators
+- Auto-scaling axes
+- Connection status display
 
 ### Option B: Terminal Client (C)
 Best for debugging and checking logs.
@@ -132,7 +204,7 @@ Best for debugging and checking logs.
 |:--------|:------------|
 | `monitor` | Starts Live Mode. Streams status every 1s. Auto-pushes alerts. |
 | `get_health` | Returns current Snapshot (Healthy/Warning/Critical). |
-| `get_sensors` | Returns raw values (Vibration Events/sec, Sound Duty Cycle %). |
+| `get_sensors` | Returns raw values (Vibration Events/sec, Sound Duty %, Temp °C, Current A). |
 | `get_log` | Downloads the blackbox.log file content from the server. |
 | `whoami` | Shows your Certificate Common Name and Access Role. |
 | `list_units` | Lists all registered machinery (e.g., "Sentinel-RT"). |
@@ -146,13 +218,100 @@ Best for debugging and checking logs.
   - Server extracts the Role (Admin/User) from the certificate fields.
 - **Logging:** Every Critical Alert is timestamped and saved to disk (`blackbox.log`) for post-incident forensics.
 
-## Future Roadmap (Next Steps)
+## Sensor Details
 
-- **Current Sensing:** Integration of ACS712 Sensor via ADS1115 ADC.
-- **Temperature:** Integration of DS18B20 Digital Sensor.
-- **Isolation:** Implementation of QNX Adaptive Partitioning (APS) to isolate the Server thread from Client threads.
+### Temperature Sensor (DS18B20)
+- **Protocol:** 1-Wire (Dallas/Maxim)
+- **Range:** -55°C to +125°C
+- **Accuracy:** ±0.5°C from -10°C to +85°C
+- **Resolution:** 9-12 bit configurable (default 12-bit)
+- **Wiring:** Requires 4.7kΩ pull-up resistor on data line
+
+### Current Sensor (ACS712 + ADS1115)
+- **ACS712 Variants:** ±5A, ±20A, or ±30A models supported
+- **Sensitivity:** 185mV/A (5A), 100mV/A (20A), 66mV/A (30A)
+- **ADC Resolution:** 16-bit via ADS1115
+- **I2C Address:** 0x48 (default, configurable)
+- **Measurement:** Both AC and DC current supported
+
+## Troubleshooting
+
+### Permission Denied (GPIO Access)
+```bash
+# Error: "Permission denied" when accessing /dev/gpio
+# Solution: Must run as root
+su
+./ims_server
+```
+
+### I2C Issues
+```bash
+# Verify I2C driver is loaded
+pidin | grep i2c
+
+# Scan for I2C devices
+i2c -d /dev/i2c1 scan
+# Expected: Device at 0x48 (ADS1115)
+```
+
+### Temperature Sensor Not Detected
+```bash
+# Check 1-Wire kernel module (if applicable)
+# Verify 4.7kΩ pull-up resistor is connected
+# Confirm GPIO 4 pin connection
+```
+
+### Current Readings Incorrect
+- Verify ACS712 is powered correctly (5V)
+- Check zero-current offset calibration
+- Ensure proper connection to ADS1115 channel 0
+
+### Server Won't Start
+```bash
+# Check if directory exists
+ls -la /data/home/<user_name>/ims
+
+# If not, create it
+mkdir -p /data/home/<user_name>/ims
+
+# Verify binary has execute permissions
+chmod +x /data/home/<user_name>/ims/ims_server
+```
+
+## QNX-Specific Notes
+
+### Root Access Requirement
+On QNX RTOS, GPIO access is restricted to the root user. The server **must** be run with root privileges:
+```bash
+su          # Switch to root
+./ims_server
+```
+
+### Deployment Path
+All binaries and certificates should be placed in:
+```
+/data/home/<user_name>/ims/
+```
+Replace `<user_name>` with your actual QNX username.
+
+### System Resources
+- **GPIO Devices:** `/dev/gpio17`, `/dev/gpio27`, `/dev/gpio4`
+- **I2C Bus:** `/dev/i2c1`
+- **Process Priority:** Server runs with default QNX scheduling policy (can be adjusted with `nice` or `renice`)
+
+## Future Roadmap
+
+- ✅ ~~Current Sensing: Integration of ACS712 Sensor via ADS1115 ADC~~ (Completed)
+- ✅ ~~Temperature: Integration of DS18B20 Digital Sensor~~ (Completed)
+- 🔄 Dashboard Enhancement: Improve Python dashboard stability and features (In Progress)
+- 📋 QNX Adaptive Partitioning: Implement APS to isolate Server thread from Client threads
+- 📋 Data Logging: Add CSV export functionality for historical analysis
+- 📋 Web Interface: Develop browser-based monitoring dashboard
 
 ---
 
-**Author:** Hemanth  
+**Author:** Hemanth Kumar  
+**GitHub:** [@Hemanthkumar04](https://github.com/Hemanthkumar04)  
+**Email:** hky21.github@gmail.com  
+**Project Type:** Final Year Project - Industrial Monitoring System  
 **License:** Academic / Open Source

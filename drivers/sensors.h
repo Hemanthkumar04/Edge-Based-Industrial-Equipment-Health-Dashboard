@@ -2,50 +2,61 @@
 #define SENSORS_H
 
 #include <stdint.h>
-#include <time.h>
 
-// Health states for the equipment
+// ============================================================
+// CONSTANTS & HARDWARE MAPPING
+// ============================================================
+#define PIN_VIBRATION 17  // Physical Pin 11
+#define PIN_SOUND     27  // Physical Pin 13
+#define PIN_TEMP_1W   4   // Physical Pin 7 (DS18B20)
+
+#define MAX_ID_LENGTH 32
+#define MAX_UNITS     5
+
+// ============================================================
+// DATA STRUCTURES
+// ============================================================
+
+/**
+ * HealthStatus: Enumerates the evaluated state of a piece of equipment.
+ */
 typedef enum {
-    HEALTH_HEALTHY,
+    HEALTH_HEALTHY = 0,
     HEALTH_WARNING,
     HEALTH_CRITICAL,
     HEALTH_FAULT
 } HealthStatus;
 
-// Data structure holding the exact readings at a given moment
+/**
+ * SensorSnapshot: Represents a point-in-time capture of all sensor data.
+ */
 typedef struct {
-    double vibration_level; // Events per second
-    double sound_level;     // Duty cycle %
-    float temperature_c;    // Celsius (from DS18B20)
-    float current_a;        // Amperes (from ACS712 via ADS1115)
-    time_t timestamp;
+    float vibration_level; // Events per second
+    float sound_level;     // Duty cycle percentage (0-100)
+    float temperature_c;   // Degrees Celsius
+    float current_a;       // Amperes
 } SensorSnapshot;
 
-// Complete health profile for a specific unit
+/**
+ * EquipmentHealth: The unified packet sent over the protocol.
+ */
 typedef struct {
-    char unit_id[32];
+    char unit_id[MAX_ID_LENGTH];
     HealthStatus status;
     SensorSnapshot snapshot;
-    char message[128];      // Alert/Warning description
+    char message[128];     // Descriptive fault message
 } EquipmentHealth;
 
 // ============================================================
-// Hardware Abstraction Layer (HAL) Prototypes
+// HARDWARE ABSTRACTION LAYER (HAL)
 // ============================================================
 
-// Base GPIO
 int hw_init();
 void hw_configure_pin(int pin, int direction);
 int hw_read_pin(int pin);
 void hw_write_pin(int pin, int val);
-
-// New Advanced Sensors
-float hw_read_current_i2c();          // Reads from ADS1115 over I2C
-float hw_read_temp_1wire(int pin);    // Reads from DS18B20 over 1-Wire
-
-// ============================================================
-// Shared Helpers
-// ============================================================
+float hw_read_current_i2c();
+float hw_read_temp_1wire(int pin);
 const char* health_to_string(HealthStatus status);
 
 #endif // SENSORS_H

@@ -53,16 +53,14 @@ int main() {
     printf("Initializing Sensor Manager...\n");
 
     SensorManager manager;
-    manager_init(&manager);
 
-    // Register Sentinel-RT 
-    // Pin 17 = Vib, Pin 27 = Sound, Pin 4 = Temperature
-    if (!manager_register_unit(&manager, "Sentinel-RT", 17, 27, 4)) {
-        fprintf(stderr, "Failed to register unit 'Sentinel-RT'\n");
+    // 1. Initialize hardware and threads (manager_init now returns int and handles registration internally)
+    if (manager_init(&manager) != 0) {
+        fprintf(stderr, "[ERROR] Failed to initialize Sensor Manager. Check hardware mapping.\n");
         return 1;
     }
 
-    printf("Sensors initialized.\n");
+    printf("Sensors initialized successfully.\n");
     printf(" - Digital polling: 1kHz (Vibration/Sound)\n");
     printf(" - Analog polling: 1Hz (Temp/Current)\n");
     printf("Starting loop. Press Ctrl+C to stop.\n\n");
@@ -70,11 +68,10 @@ int main() {
     EquipmentHealth health;
 
     while (1) {
-        // 1. Wait for data to accumulate (Sample window = 1.0s)
-        // This matches the slow_loop_counter in sensor_manager.c
+        // 2. Wait for data to accumulate (Sample window = 1.0s)
         sleep(1); 
 
-        // 2. Get the health report
+        // 3. Get the health report
         if (manager_get_health(&manager, "Sentinel-RT", &health)) {
             print_health(&health);
         } else {
@@ -82,5 +79,7 @@ int main() {
         }
     }
 
+    // Cleanup (Unreachable due to while(1), but good practice)
+    manager_cleanup(&manager);
     return 0;
 }

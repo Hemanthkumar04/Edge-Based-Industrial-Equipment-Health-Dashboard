@@ -6,144 +6,123 @@
 #include "sensor_manager.h"
 #include "sensors.h"
 
-// Internal DB
-typedef struct {
-    char unit_id[32];
-    int vibration_pin;
-    int sound_pin;
-    int temp_pin;
-    
-    int vib_pulse_count;
-    int sound_high_samples;
-    int total_samples;
-    
-    float current_temp;
-    float current_amps;
-} MonitoredUnit;
+// ============================================================
+// INTERNAL STATE & THREADING
+// ============================================================
+static pthread_mutex_t data_mutex = PTHREAD_MUTEX_INITIALIZER;
+static EquipmentHealth current_health;
+static int running = 0;
 
-static MonitoredUnit unit_db[MAX_UNITS];
-static int unit_count = 0;
-static pthread_t monitor_thread;
-static int thread_running = 0;
-static pthread_mutex_t data_lock = PTHREAD_MUTEX_INITIALIZER;
+// Thresholds
+#define VIB_WARNING_THRESHOLD  100.0
+#define VIB_CRITICAL_THRESHOLD 200.0
+#define TMP_CRITICAL_THRESHOLD 80.0
+#define CUR_CRITICAL_THRESHOLD 15.0
 
+// ============================================================
+// BACKGROUND POLLING THREAD (1kHz)
+// ============================================================
+void* polling_thread(void* arg) {
+    (void)arg; // Silence the unused variable warning
+    uint32_t vib_counts = 0;
+    uint32_t snd_counts = 0;
+    int seconds_counter = 0;
 
+    printf("[SENSORS] Background polling thread started.\n");
 
-// Background Thread
-void* background_poller(void* arg) {
-    (void)arg;
-    int slow_loop_counter = 0;
+    while (running) {
+        // 1. High-Frequency Digital Polling (GPIO)
+        if (hw_read_pin(PIN_VIBRATION)) vib_counts++;
+        if (hw_read_pin(PIN_SOUND)) snd_counts++;
 
-    while (thread_running) {
-        pthread_mutex_lock(&data_lock);
-        
-        for (int i = 0; i < unit_count; i++) {
-            // Fast polling (1ms) for digital signals
-            if (hw_read_pin(unit_db[i].vibration_pin)) unit_db[i].vib_pulse_count++;
-            if (hw_read_pin(unit_db[i].sound_pin))     unit_db[i].sound_high_samples++;
-            unit_db[i].total_samples++;
+        // 2. Accumulation & Evaluation (Every 1 second / 1000 ticks)
+        usleep(1000); // 1ms interval
+        seconds_counter++;
 
-            // Slow polling (1000ms) for Analog/I2C/1-Wire to prevent blocking the thread
-            if (slow_loop_counter >= 1000) {
-                unit_db[i].current_temp = hw_read_temp_1wire(unit_db[i].temp_pin);
-                unit_db[i].current_amps = hw_read_current_i2c();
+        if (seconds_counter >= 1000) {
+            pthread_mutex_lock(&data_mutex);
+            
+            // Populate Snapshot
+            current_health.snapshot.vibration_level = (float)vib_counts;
+            current_health.snapshot.sound_level = (float)(snd_counts / 10.0); // Simple duty cycle %
+            current_health.snapshot.temperature_c = hw_read_temp_1wire(PIN_TEMP_1W);
+            current_health.snapshot.current_a = hw_read_current_i2c();
+
+            // Evaluate Health Status
+            if (current_health.snapshot.vibration_level > VIB_CRITICAL_THRESHOLD || 
+                current_health.snapshot.current_a > CUR_CRITICAL_THRESHOLD) {
+                current_health.status = HEALTH_CRITICAL;
+                strcpy(current_health.message, "CRITICAL FAULT DETECTED");
+            } 
+            else if (current_health.snapshot.vibration_level > VIB_WARNING_THRESHOLD) {
+                current_health.status = HEALTH_WARNING;
+                strcpy(current_health.message, "High Vibration Warning");
+            } 
+            else {
+                current_health.status = HEALTH_HEALTHY;
+                strcpy(current_health.message, "System Nominal");
             }
+
+            pthread_mutex_unlock(&data_mutex);
+
+            // Reset local counters for the next second
+            vib_counts = 0;
+            snd_counts = 0;
+            seconds_counter = 0;
         }
-        
-        if (slow_loop_counter >= 1000) {
-            slow_loop_counter = 0;
-        } else {
-            slow_loop_counter++;
-        }
-        
-        pthread_mutex_unlock(&data_lock);
-        usleep(1000); // 1ms sample rate
     }
     return NULL;
 }
 
-void manager_init(SensorManager *mgr) {
-    (void)mgr;
-    if (hw_init() != 0) fprintf(stderr, "[HW] Failed to init GPIO\n");
-    if (!thread_running) {
-        thread_running = 1;
-        pthread_create(&monitor_thread, NULL, background_poller, NULL);
+// ============================================================
+// PUBLIC API
+// ============================================================
+
+int manager_init(SensorManager* mgr) {
+    if (hw_init() != 0) return -1;
+
+    // Initialize state
+    memset(&current_health, 0, sizeof(EquipmentHealth));
+    strcpy(current_health.unit_id, "Sentinel-RT");
+    
+    running = 1;
+    mgr->is_running = 1;
+
+    // Start background thread
+    if (pthread_create(&mgr->thread_id, NULL, polling_thread, mgr) != 0) {
+        perror("pthread_create failed");
+        return -1;
     }
+
+    return 0; // Success
 }
 
-// Updated registration to include temp_pin
-int manager_register_unit(SensorManager *mgr, const char* id, int vib_pin, int sound_pin, int temp_pin) {
+int manager_get_health(SensorManager* mgr, const char* unit_id, EquipmentHealth* out_health) {
     (void)mgr;
-    if (unit_count >= MAX_UNITS) return 0;
-    pthread_mutex_lock(&data_lock);
+    pthread_mutex_lock(&data_mutex);
     
-    strncpy(unit_db[unit_count].unit_id, id, 31);
-    unit_db[unit_count].vibration_pin = vib_pin;
-    unit_db[unit_count].sound_pin = sound_pin;
-    unit_db[unit_count].temp_pin = temp_pin;
-    
-    unit_db[unit_count].vib_pulse_count = 0;
-    unit_db[unit_count].total_samples = 0;
-    unit_db[unit_count].current_temp = 0.0;
-    unit_db[unit_count].current_amps = 0.0;
-    
-    unit_count++;
-    pthread_mutex_unlock(&data_lock);
-    return 1;
-}
-
-int manager_get_health(SensorManager *mgr, const char* unit_id, EquipmentHealth *out_health) {
-    (void)mgr;
-    pthread_mutex_lock(&data_lock);
-    for (int i = 0; i < unit_count; i++) {
-        if (strcmp(unit_db[i].unit_id, unit_id) == 0) {
-            
-            double norm = (unit_db[i].total_samples > 0) ? (1000.0 / unit_db[i].total_samples) : 1.0;
-            double vib = unit_db[i].vib_pulse_count * norm;
-            double snd = (unit_db[i].total_samples > 0) ? 
-                         ((double)unit_db[i].sound_high_samples / unit_db[i].total_samples * 100.0) : 0.0;
-
-            strncpy(out_health->unit_id, unit_db[i].unit_id, 31);
-            out_health->snapshot.vibration_level = vib;
-            out_health->snapshot.sound_level = snd;
-            out_health->snapshot.temperature_c = unit_db[i].current_temp;
-            out_health->snapshot.current_a = unit_db[i].current_amps;
-
-            out_health->message[0] = '\0'; // Clear previous message
-
-            // Combined Threshold Logic
-            if (vib > 200 || snd > 80 || unit_db[i].current_amps > 15.0 || unit_db[i].current_temp > 80.0) {
-                out_health->status = HEALTH_CRITICAL;
-                strcpy(out_health->message, "CRITICAL FAULT DETECTED");
-            } 
-            else if (vib > 100 || snd > 50 || unit_db[i].current_amps > 12.0 || unit_db[i].current_temp > 65.0) {
-                out_health->status = HEALTH_WARNING;
-            } 
-            else {
-                out_health->status = HEALTH_HEALTHY;
-            }
-
-            // Reset fast polling counters (Do not reset current/temp, they update 1x per sec)
-            unit_db[i].vib_pulse_count = 0;
-            unit_db[i].sound_high_samples = 0;
-            unit_db[i].total_samples = 0;
-
-            pthread_mutex_unlock(&data_lock);
-            return 1;
-        }
+    // Only return data if IDs match
+    if (strcmp(current_health.unit_id, unit_id) == 0) {
+        memcpy(out_health, &current_health, sizeof(EquipmentHealth));
+        pthread_mutex_unlock(&data_mutex);
+        return 1;
     }
-    pthread_mutex_unlock(&data_lock);
+    
+    pthread_mutex_unlock(&data_mutex);
     return 0;
 }
 
-int manager_list_units(SensorManager *mgr, char list[][MAX_ID_LENGTH], int max_count) {
-    (void)mgr;
-    int count = 0;
-    pthread_mutex_lock(&data_lock);
-    for (int i = 0; i < unit_count && i < max_count; i++) {
-        strncpy(list[i], unit_db[i].unit_id, MAX_ID_LENGTH);
-        count++;
+int manager_list_units(SensorManager* mgr, char list[MAX_UNITS][MAX_ID_LENGTH], int max_units) {
+    (void)mgr; (void)max_units;
+    strcpy(list[0], current_health.unit_id);
+    return 1;
+}
+
+void manager_cleanup(SensorManager* mgr) {
+    if (running) {
+        running = 0;
+        mgr->is_running = 0;
+        pthread_join(mgr->thread_id, NULL);
+        printf("[SENSORS] Background thread joined and cleaned up successfully.\n");
     }
-    pthread_mutex_unlock(&data_lock);
-    return count;
 }

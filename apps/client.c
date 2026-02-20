@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
                 }
             }        }
     }
-
+    printf("\n");
     reset_terminal_mode();
     SSL_shutdown(ssl);
     SSL_free(ssl);

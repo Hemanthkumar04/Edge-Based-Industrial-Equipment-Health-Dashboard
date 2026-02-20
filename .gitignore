@@ -46,8 +46,9 @@ certs/*.pem
 certs/*.p12
 certs/*.pfx
 
-# Keep only the certs directory structure
-!certs/.gitkeep
+# Allow README.md inside certs folder
+!certs/
+!certs/README.md
 
 # Log files
 *.log

@@ -55,7 +55,9 @@ int hw_init();
 void hw_configure_pin(int pin, int direction);
 int hw_read_pin(int pin);
 void hw_write_pin(int pin, int val);
+float hw_read_vibration_i2c();
 float hw_read_current_i2c();
+float hw_read_temp_i2c();
 float hw_read_temp_1wire(int pin);
 const char* health_to_string(HealthStatus status);
 

@@ -84,8 +84,13 @@ deploy() {
     ssh $QNX_USER@$SERVER_IP "mkdir -p $REMOTE_DIR/certs"
     
     if [ -f "ims_server" ] && [ -f "certs/server.crt" ]; then
+        test_bins=(sensor_test)
+        for bench in bench_*_qnx; do
+            [ -f "$bench" ] && test_bins+=("$bench")
+        done
+
         # Transfer Binaries to root remote dir
-        scp ims_server sensor_test $QNX_USER@$SERVER_IP:$REMOTE_DIR/
+        scp ims_server "${test_bins[@]}" $QNX_USER@$SERVER_IP:$REMOTE_DIR/
         if [ $? -ne 0 ]; then error "Binary deployment failed."; fi
         
         # Transfer Server Certs to remote certs/ dir

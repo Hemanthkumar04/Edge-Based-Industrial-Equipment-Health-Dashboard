@@ -34,6 +34,10 @@ SRC_SERVER = apps/server.c
 SRC_CLIENT = apps/client.c
 SRC_TEST   = tests/sensor_test.c
 
+QNX_BENCH_SOURCES = $(wildcard tests/bench_*_qnx.c)
+QNX_BENCH_BINS    = $(patsubst tests/%.c,%,$(QNX_BENCH_SOURCES))
+QNX_TEST_BINS     = $(TARGET_TEST) $(QNX_BENCH_BINS)
+
 # Binaries
 TARGET_SERVER = ims_server
 TARGET_CLIENT = ims_client
@@ -43,7 +47,7 @@ TARGET_TEST   = sensor_test
 # Build Targets
 # ============================================================================
 
-all: server_qnx client_linux sensor_test_qnx
+all: server_qnx client_linux tests_qnx
 
 # 1. QNX Server
 server_qnx:
@@ -63,13 +67,22 @@ sensor_test_qnx:
 	$(CC_QNX) $(CFLAGS_QNX) $(CFLAGS_COMMON) -o $(TARGET_TEST) \
 		$(SRC_TEST) drivers/sensors.c drivers/sensor_manager.c $(LIBS_QNX)
 
+qnx_benchmarks: $(QNX_BENCH_BINS)
+	@echo "[OK] Built QNX benchmark tests."
+
+$(QNX_BENCH_BINS): %: tests/%.c
+	@echo "[INFO] Building QNX benchmark $@..."
+	$(CC_QNX) $(CFLAGS_QNX) -Wall -Wextra -O2 -o $@ $<
+
+tests_qnx: sensor_test_qnx qnx_benchmarks
+
 # FIX: Removed 'rm -rf certs/' to prevent quick_start.sh from deleting 
 # newly generated keys during the build phase.
 clean:
 	@echo "[INFO] Cleaning up binaries and logs..."
-	rm -f $(TARGET_SERVER) $(TARGET_CLIENT) $(TARGET_TEST) *.o 
+	rm -f $(TARGET_SERVER) $(TARGET_CLIENT) $(QNX_TEST_BINS) *.o 
 	rm -f blackbox.log
 
-deploy: server_qnx sensor_test_qnx
+deploy: server_qnx tests_qnx
 	@echo "[INFO] Deploying to QNX..."
-	scp $(TARGET_SERVER) $(TARGET_TEST) qnxuser@10.42.0.171:/home/qnxuser/ims/
+	scp $(TARGET_SERVER) $(QNX_TEST_BINS) qnxuser@10.42.0.171:/home/qnxuser/ims/
